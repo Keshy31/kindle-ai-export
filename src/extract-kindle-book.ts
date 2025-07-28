@@ -36,7 +36,7 @@ async function main() {
   assert(amazonPassword, 'AMAZON_PASSWORD is required')
 
   const outDir = path.join('out', asin)
-  const userDataDir = path.join(outDir, 'data')
+  const userDataDir = path.resolve(path.join(outDir, 'data'))
   const pageScreenshotsDir = path.join(outDir, 'pages')
   await fs.mkdir(userDataDir, { recursive: true })
   await fs.mkdir(pageScreenshotsDir, { recursive: true })
@@ -47,8 +47,6 @@ async function main() {
   const context = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',
-    executablePath:
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     args: ['--hide-crash-restore-bubble'],
     ignoreDefaultArgs: ['--enable-automation'],
     deviceScaleFactor: 2,
@@ -130,20 +128,23 @@ async function main() {
   // await page.waitForURL('**/signin')
 
   async function updateSettings() {
-    await page.locator('ion-button[title="Reader settings"]').click()
-    await delay(1000)
+    await page
+      .locator('ion-button[item-i-d="top_menu_reader_settings"]')
+      .click()
+
+    await delay(500)
 
     // Change font to Amazon Ember
     await page.locator('#AmazonEmber').click()
 
     // Change layout to single column
     await page
-      .locator('[role="radiogroup"][aria-label$=" columns"]', {
-        hasText: 'Single Column'
-      })
+      .locator('span[aria-label="Single Column"]')
       .click()
 
-    await page.locator('ion-button[title="Reader settings"]').click()
+    await page
+      .locator('ion-button[item-i-d="top_menu_reader_settings"]')
+      .click()
     await delay(1000)
   }
 
@@ -151,7 +152,7 @@ async function main() {
     await delay(1000)
     await page.locator('#reader-header').hover({ force: true })
     await delay(200)
-    await page.locator('ion-button[title="Reader menu"]').click()
+    await page.locator('ion-button[item-i-d="top_menu_navigation_menu"]').click()
     await delay(1000)
     await page
       .locator('ion-item[role="listitem"]', { hasText: 'Go to Page' })
@@ -168,8 +169,7 @@ async function main() {
 
   async function getPageNav() {
     const footerText = await page
-      .locator('ion-footer ion-title')
-      .first()
+      .locator('ion-title[item-i-d="reader-footer-title"] .text-div')
       .textContent()
     return parsePageNav(footerText)
   }
@@ -190,24 +190,27 @@ async function main() {
 
   await dismissPossibleAlert()
   await ensureFixedHeaderUI()
-  await updateSettings()
+  //await updateSettings()
 
   const initialPageNav = await getPageNav()
 
-  await page.locator('ion-button[title="Table of Contents"]').click()
+  await page
+    .locator('ion-button[item-i-d="top_menu_table_of_contents"]')
+    .click()
+
   await delay(1000)
 
-  const $tocItems = await page.locator('ion-list ion-item').all()
+  const $tocItems = await page.locator('ion-list ion-item.toc-item').all()
   const tocItems: Array<TocItem> = []
 
   console.warn(`initializing ${$tocItems.length} TOC items...`)
   for (const tocItem of $tocItems) {
     await tocItem.scrollIntoViewIfNeeded()
 
-    const title = await tocItem.textContent()
+    const title = await tocItem.locator('button.toc-item-button').getAttribute('aria-label')
     assert(title)
 
-    await tocItem.click()
+    await tocItem.locator('button.toc-item-button').click()
     await delay(250)
 
     const pageNav = await getPageNav()
@@ -236,7 +239,7 @@ async function main() {
   const total = parsedToc.firstPageTocItem.total
   const pagePadding = `${total * 2}`.length
   await parsedToc.firstPageTocItem.locator!.scrollIntoViewIfNeeded()
-  await parsedToc.firstPageTocItem.locator!.click()
+  await parsedToc.firstPageTocItem.locator!.locator('button.toc-item-button').click()
 
   const totalContentPages = Math.min(
     parsedToc.afterLastPageTocItem?.page
@@ -246,7 +249,8 @@ async function main() {
   )
   assert(totalContentPages > 0, 'No content pages found')
 
-  await page.locator('.side-menu-close-button').click()
+  // Close the TOC menu by clicking the TOC button again
+  await page.locator('ion-button[item-i-d="top_menu_table_of_contents"]').click()
   await delay(1000)
 
   const pages: Array<PageChunk> = []
@@ -317,7 +321,7 @@ async function main() {
 
           // Click the next page button
           await page
-            .locator('.kr-chevron-container-right')
+            .locator('button#kr-chevron-right')
             .click({ timeout: 1000 })
         }
         // await delay(500)
