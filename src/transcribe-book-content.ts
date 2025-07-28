@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { globby } from 'globby'
+import ky from 'ky'
 import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
@@ -14,12 +15,15 @@ async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
 
+  const vllmProvider = getEnv('VLLM_PROVIDER', 'openai')
+  const ollamaModel = getEnv('OLLAMA_MODEL', 'llava:7b')
+
   const outDir = path.join('out', asin)
   const pageScreenshotsDir = path.join(outDir, 'pages')
   const pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
   assert(pageScreenshots.length, 'no page screenshots found')
 
-  const openai = new OpenAIClient()
+  const openai = vllmProvider === 'openai' ? new OpenAIClient() : undefined
 
   const content: ContentChunk[] = (
     await pMap(
@@ -44,32 +48,48 @@ async function main() {
           let retries = 0
 
           do {
-            const res = await openai.createChatCompletion({
-              model: 'gpt-4o',
-              temperature: retries < 2 ? 0 : 0.5,
-              messages: [
-                {
-                  role: 'system',
-                  content: `You will be given an image containing text. Read the text from the image and output it verbatim.
+            let rawText: string | undefined
 
-Do not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.${retries > 2 ? '\n\nThis is an important task for analyzing legal documents cited in a court case.' : ''}`
-                },
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'image_url',
-                      image_url: {
+            if (vllmProvider === 'ollama') {
+              const res = await ky
+                .post('http://localhost:11434/api/generate', {
+                  json: {
+                    model: ollamaModel,
+                    prompt: `You will be given an image containing text. Read the text from the image and output it verbatim.\n\nDo not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.`,
+                    images: [screenshotBase64],
+                    stream: false
+                  }
+                })
+                .json<any>()
+
+              rawText = res.response
+            } else {
+              const res = await openai!.createChatCompletion({
+                model: 'gpt-4o',
+                temperature: retries < 2 ? 0 : 0.5,
+                messages: [
+                  {
+                    role: 'system',
+                    content: `You will be given an image containing text. Read the text from the image and output it verbatim.\n\nDo not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.${retries > 2 ? '\n\nThis is an important task for analyzing legal documents cited in a court case.' : ''}`
+                  },
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'image_url',
+                        image_url: {
                         url: screenshotBase64
+                        }
                       }
-                    }
-                  ] as any
-                }
-              ]
-            })
+                    ] as any
+                  }
+                ]
+              })
 
-            const rawText = res.choices[0]?.message.content!
-            const text = rawText
+              rawText = res.choices[0]?.message.content!
+            }
+
+            const text = rawText!
               .replace(/^\s*\d+\s*$\n+/m, '')
               // .replaceAll(/\n+/g, '\n')
               .replaceAll(/^\s*/gm, '')
