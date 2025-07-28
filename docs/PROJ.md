@@ -30,7 +30,8 @@ The process is orchestrated by the main script, `src/extract-kindle-book.ts`, an
 
 ### 5. Content Transcription (Image-to-Text)
 
-- The `src/transcribe-book-content.ts` script takes the page screenshots and uses a vision-capable Large Language Model (vLLM) like **`gpt-4o`** or **`gpt-4o-mini`** to perform Optical Character Recognition (OCR), converting the images into text.
+- The `src/transcribe-book-content.ts` script takes the page screenshots and uses a vision-capable Large Language Model (vLLM) to perform Optical Character Recognition (OCR), converting the images into text.
+- By default, it uses OpenAI's **`gpt-4o`** or **`gpt-4o-mini`** models. Alternatively, you can configure it to use a local vLLM running on [Ollama](https://ollama.com/) by setting `VLLM_PROVIDER=ollama` and specifying a model with `OLLAMA_MODEL` (e.g., `llava:7b`).
 - The extracted text content is saved to `out/[ASIN]/content.json`.
 
 ### 6. Output Generation
@@ -43,7 +44,7 @@ The process is orchestrated by the main script, `src/extract-kindle-book.ts`, an
 ## Core Scripts
 
 - `src/extract-kindle-book.ts`: Main script to log in and extract page screenshots and metadata.
-- `src/transcribe-book-content.ts`: Converts page images to text using an AI model.
+- `src/transcribe-book-content.ts`: Converts page images to text using either OpenAI or a local Ollama instance.
 - `src/export-book-pdf.ts`: Compiles screenshots into a PDF.
 - `src/export-book-markdown.ts`: Converts transcribed text into Markdown.
 - `src/export-book-audio.ts`: Converts transcribed text into an audiobook.
@@ -60,7 +61,8 @@ The accuracy of the text transcription is very high but not perfect. Occasional 
 
 ### Costs
 
-Transcribing the book content incurs costs from the AI provider (e.g., OpenAI). Using `gpt-4o-mini` is significantly cheaper than `gpt-4o`. Generating audiobooks also incurs costs from the chosen TTS provider.
+Transcribing the book content incurs costs from the AI provider (e.g., OpenAI). Using `gpt-4o-mini` is significantly cheaper than `gpt-4o`.
+Using a local Ollama instance can eliminate these costs, but requires a local setup with a compatible model.
 
 ## Summary
 

@@ -167,11 +167,31 @@ Set up these required environment variables in a local `.env`:
 AMAZON_EMAIL=
 AMAZON_PASSWORD=
 ASIN=
-
-OPENAI_API_KEY=
+```
+You can find your book's [ASIN](https://en.wikipedia.org/wiki/Amazon_Standard_Identification_Number) (Amazon ID) by visiting [read.amazon.com](https://read.amazon.com) and clicking on the book you want to export. The resulting URL will look like `https://read.amazon.com/?asin=B0819W19WD&ref_=kwl_kr_iv_rec_2`, with `B0819W19WD` being the ASIN in this case.
 ```
 
-You can find your book's [ASIN](https://en.wikipedia.org/wiki/Amazon_Standard_Identification_Number) (Amazon ID) by visiting [read.amazon.com](https://read.amazon.com) and clicking on the book you want to export. The resulting URL will look like `https://read.amazon.com/?asin=B0819W19WD&ref_=kwl_kr_iv_rec_2`, with `B0819W19WD` being the ASIN in this case.
+OPENAI_API_KEY=
+
+# (Optional) To use a local vLLM via Ollama instead of OpenAI
+# VLLM_PROVIDER=ollama
+# OLLAMA_MODEL=llava:7b
+
+# (Optional) Used for generating AI-narrated audiobooks
+# TTS_ENGINE=openai
+# TTS_MODEL=tts-1
+# TTS_VOICE=alloy
+```
+
+- `AMAZON_EMAIL` - Your Amazon account email.
+- `AMAZON_PASSWORD` - Your Amazon account password.
+- `ASIN` - The ASIN of the book you want to export.
+- `OPENAI_API_KEY` - Your OpenAI API key.
+- `VLLM_PROVIDER` - (Optional) Set to `ollama` to use a local vLLM via Ollama.
+- `OLLAMA_MODEL` - (Optional) The model to use with Ollama (e.g., `llava:7b`).
+- `TTS_ENGINE` - (Optional) The TTS engine to use (e.g., `openai`).
+- `TTS_MODEL` - (Optional) The TTS model to use (e.g., `tts-1`).
+- `TTS_VOICE` - (Optional) The TTS voice to use (e.g., `alloy`).
 
 ### Extract Kindle Book
 
@@ -203,6 +223,7 @@ npx tsx src/transcribe-book-content.ts
 
 - _(This takes a few minutes to run)_
 - This takes each of the page screenshots and runs them through a vLLM (`gpt-4o` or `gpt-4o-mini`) to extract the raw text content from each page of the book.
+- You can also use a local vLLM running on [Ollama](https://ollama.com/). To do this, set `VLLM_PROVIDER=ollama` in your `.env` file and make sure your Ollama instance is running. You can specify the model to use with `OLLAMA_MODEL` (e.g., `OLLAMA_MODEL=llava:7b`).
 - It then stitches these text chunks together, taking into account chapter boundaries.
 - The result is stored as JSON to `out/${asin}/content.json`.
 - Example: [examples/B0819W19WD/content.json](./examples/B0819W19WD/content.json)
