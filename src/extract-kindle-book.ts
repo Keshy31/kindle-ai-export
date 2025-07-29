@@ -303,6 +303,7 @@ async function main() {
     }
 
     let retries = 0
+    let navigationSucceeded = false
 
     // Occasionally the next page button doesn't work, so ensure that the main
     // image src actually changes before continuing.
@@ -338,10 +339,7 @@ async function main() {
         .locator(krRendererMainImageSelector)
         .getAttribute('src')
       if (newSrc !== src) {
-        break
-      }
-
-      if (pageNav.page >= totalContentPages) {
+        navigationSucceeded = true
         break
       }
 
@@ -349,6 +347,11 @@ async function main() {
 
       ++retries
     } while (true)
+
+    if (!navigationSucceeded) {
+      break
+    }
+
   } while (true)
 
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
