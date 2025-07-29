@@ -190,7 +190,7 @@ async function main() {
 
   await dismissPossibleAlert()
   await ensureFixedHeaderUI()
-  //await updateSettings()
+  await updateSettings()
 
   const initialPageNav = await getPageNav()
 
