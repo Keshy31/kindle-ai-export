@@ -4,7 +4,7 @@ $baseDir = "out\$asin"
 $inputDir = "$baseDir\pages"
 $outputDir = $baseDir
 $metadataFile = "$baseDir\metadata.json"
-$outputFile = "$outputDir\book.md"
+$outputFile = "$outputDir\$asin.md"
 
 # Ensure directories exist
 New-Item -ItemType Directory -Force -Path $outputDir
@@ -49,11 +49,11 @@ if ($useMetadata) {
 # Initialize output content
 $outputContent = "# $bookTitle`n`n**Author(s):** $authors`n`n---`n`n"
 
-$maxJobs = 4  # Adjust based on CPU cores
+$maxJobs = 4 # Adjust based on CPU cores
 
 $jobScript = {
     param($pngFile, $outputDir, $pageNum, $index)
-    $tempTxt = "$outputDir\temp_page_$pageNum.txt"
+    $tempTxt = "$outputDir\temp_page_$index.txt"
     tesseract $pngFile $tempTxt.Replace('.txt', '') -l eng --psm 3
     if (Test-Path $tempTxt) {
         $pageText = Get-Content $tempTxt -Raw
@@ -68,6 +68,10 @@ $jobScript = {
 $jobs = @()
 $results = @()
 
+$totalPages = $pages.Count
+$started = 0
+$completed = 0
+
 foreach ($page in $pages) {
     $pageNum = $page.page
     $index = $page.index
@@ -81,19 +85,26 @@ foreach ($page in $pages) {
             $result = Receive-Job $job
             $results += $result
             Remove-Job $job
+            $completed++
+            Write-Host "Completed OCR job $completed of $totalPages (page $pageNum, index $index)"
         }
         Start-Sleep -Milliseconds 100
     }
 
+    $started++
+    Write-Host "Started OCR job $started of $totalPages (page $pageNum, index $index)"
     $job = Start-Job -ScriptBlock $jobScript -ArgumentList $pngFile, $outputDir, $pageNum, $index
     $jobs += $job
 }
 
 # Wait for all remaining jobs and collect results
+Write-Host "Waiting for remaining jobs to complete..."
 Get-Job | Wait-Job | ForEach-Object {
     $result = Receive-Job $_
     $results += $result
     Remove-Job $_
+    $completed++
+    Write-Host "Completed OCR job $completed of $totalPages"
 }
 
 # Sort results by index and build output
