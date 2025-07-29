@@ -14,8 +14,8 @@ async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
 
-  const outDir = path.join('out', asin)
-  const pageScreenshotsDir = path.join(outDir, 'pages')
+  const outDir = path.posix.join('out', asin)
+  const pageScreenshotsDir = path.posix.join(outDir, 'pages')
   const pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
   assert(pageScreenshots.length, 'no page screenshots found')
 
