@@ -100,22 +100,6 @@ async function extractBook(
     // await page.locator('input[type="checkbox"]').click()
     await page.locator('input[type="submit"]').click()
 
-    if (!/\/kindle-library/g.test(new URL(page.url()).pathname)) {
-      const code = await input({
-        message: '2-factor auth code?'
-      })
-
-      // Only enter 2-factor auth code if needed
-      if (code) {
-        await page.locator('input[type="tel"]').fill(code)
-        await page
-          .locator(
-            'input[type="submit"][aria-labelledby="cvf-submit-otp-button-announce"]'
-          )
-          .click()
-      }
-    }
-
     if (!page.url().includes(bookReaderUrl)) {
       await page.goto(bookReaderUrl)
 
