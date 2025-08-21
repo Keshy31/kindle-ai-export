@@ -27,10 +27,11 @@ interface TocItem extends PageNav {
   locator?: Locator
 }
 
-async function main() {
-  const asin = getEnv('ASIN')
-  const amazonEmail = getEnv('AMAZON_EMAIL')
-  const amazonPassword = getEnv('AMAZON_PASSWORD')
+async function extractBook(
+  asin: string,
+  amazonEmail: string,
+  amazonPassword: string
+) {
   assert(asin, 'ASIN is required')
   assert(amazonEmail, 'AMAZON_EMAIL is required')
   assert(amazonPassword, 'AMAZON_PASSWORD is required')
@@ -351,7 +352,6 @@ async function main() {
     if (!navigationSucceeded) {
       break
     }
-
   } while (true)
 
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
@@ -369,6 +369,46 @@ async function main() {
 
   await page.close()
   await context.close()
+}
+
+async function main() {
+  const amazonEmail = getEnv('AMAZON_EMAIL')
+  const amazonPassword = getEnv('AMAZON_PASSWORD')
+  assert(amazonEmail, 'AMAZON_EMAIL is required')
+  assert(amazonPassword, 'AMAZON_PASSWORD is required')
+
+  const completedAsinsPath = path.join('out', 'completed_asins_extract.txt')
+  let completedAsins = new Set<string>()
+  try {
+    const completedData = await fs.readFile(completedAsinsPath, 'utf-8')
+    completedAsins = new Set(completedData.split('\n').map((s) => s.trim()))
+  } catch (err: any) {
+    if (err.code !== 'ENOENT') {
+      throw err
+    }
+  }
+
+  const csvData = await fs.readFile(path.join('input', 'ASIN.csv'), 'utf-8')
+  const asins = csvData
+    .split('\n')
+    .slice(1) // Skip header
+    .map((row) => row.trim())
+    .filter((row) => row)
+
+  for (const asin of asins) {
+    if (completedAsins.has(asin)) {
+      console.log(`Skipping already processed ASIN: ${asin}`)
+      continue
+    }
+
+    try {
+      console.log(`\n---\nProcessing ASIN: ${asin}\n---`)
+      await extractBook(asin, amazonEmail, amazonPassword)
+      await fs.appendFile(completedAsinsPath, `${asin}\n`)
+    } catch (err: any) {
+      console.error(`Error processing ASIN ${asin}:`, err.message)
+    }
+  }
 }
 
 function parsePageNav(text: string | null): PageNav | undefined {
