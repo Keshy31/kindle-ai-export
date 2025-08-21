@@ -5,7 +5,7 @@ import path from 'node:path'
 
 import { input } from '@inquirer/prompts'
 import delay from 'delay'
-import { chromium, type Locator } from 'playwright'
+import { chromium, type Locator, type Page, type Response } from 'playwright'
 
 import type { BookInfo, BookMeta, BookMetadata, PageChunk } from './types'
 import {
@@ -27,38 +27,20 @@ interface TocItem extends PageNav {
   locator?: Locator
 }
 
-async function extractBook(
-  asin: string,
-  amazonEmail: string,
-  amazonPassword: string
-) {
+async function extractBook(page: Page, asin: string) {
   assert(asin, 'ASIN is required')
-  assert(amazonEmail, 'AMAZON_EMAIL is required')
-  assert(amazonPassword, 'AMAZON_PASSWORD is required')
 
   const outDir = path.join('out', asin)
-  const userDataDir = path.resolve(path.join(outDir, 'data'))
   const pageScreenshotsDir = path.join(outDir, 'pages')
-  await fs.mkdir(userDataDir, { recursive: true })
   await fs.mkdir(pageScreenshotsDir, { recursive: true })
 
   const krRendererMainImageSelector = '#kr-renderer .kg-full-page-img img'
   const bookReaderUrl = `https://read.amazon.com/?asin=${asin}`
 
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    headless: false,
-    channel: 'chrome',
-    args: ['--hide-crash-restore-bubble'],
-    ignoreDefaultArgs: ['--enable-automation'],
-    deviceScaleFactor: 2,
-    viewport: { width: 1280, height: 720 }
-  })
-  const page = await context.newPage()
-
   let info: BookInfo | undefined
   let meta: BookMeta | undefined
 
-  page.on('response', async (response) => {
+  const responseHandler = async (response: Response) => {
     try {
       const status = response.status()
       if (status !== 200) return
@@ -85,27 +67,14 @@ async function extractBook(
         meta = metadata
       }
     } catch {}
-  })
+  }
+  page.on('response', responseHandler)
 
-  await Promise.any([
-    page.goto(bookReaderUrl, { timeout: 30_000 }),
-    page.waitForURL('**/ap/signin', { timeout: 30_000 })
-  ])
+  await page.goto(bookReaderUrl, { timeout: 30_000 })
 
   if (/\/ap\/signin/g.test(new URL(page.url()).pathname)) {
-    await page.locator('input[type="email"]').fill(amazonEmail)
-    await page.locator('input[type="submit"]').click()
-
-    await page.locator('input[type="password"]').fill(amazonPassword)
-    // await page.locator('input[type="checkbox"]').click()
-    await page.locator('input[type="submit"]').click()
-
-    if (!page.url().includes(bookReaderUrl)) {
-      await page.goto(bookReaderUrl)
-
-      // page.waitForURL('**/kindle-library', { timeout: 30_000 })
-      // await page.locator(`#title-${asin}`).click()
-    }
+    page.removeListener('response', responseHandler)
+    throw new Error('Login session expired or invalid.')
   }
 
   // await page.goto('https://read.amazon.com/landing')
@@ -338,6 +307,18 @@ async function extractBook(
     }
   } while (true)
 
+  let retries = 0
+  while ((!info || !meta) && retries < 20) {
+    // wait up to 10 seconds
+    await delay(500)
+    retries++
+  }
+
+  if (!info || !meta) {
+    page.removeListener('response', responseHandler)
+    throw new Error(`Could not fetch book metadata for ASIN ${asin}`)
+  }
+
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
   await fs.writeFile(
     path.join(outDir, 'metadata.json'),
@@ -351,8 +332,7 @@ async function extractBook(
     await goToPage(initialPageNav.page)
   }
 
-  await page.close()
-  await context.close()
+  page.removeListener('response', responseHandler)
 }
 
 async function main() {
@@ -379,6 +359,60 @@ async function main() {
     .map((row) => row.trim())
     .filter((row) => row)
 
+  if (!asins.length) {
+    console.log('No ASINs to process.')
+    return
+  }
+
+  console.log(`Starting book extraction for ${asins.length} ASINs...`)
+
+  const browser = await chromium.launch({
+    headless: false,
+    channel: 'chrome',
+    args: ['--hide-crash-restore-bubble'],
+    ignoreDefaultArgs: ['--enable-automation']
+  })
+  const context = await browser.newContext({
+    deviceScaleFactor: 2,
+    viewport: { width: 1280, height: 720 }
+  })
+  const page = await context.newPage()
+
+  // Login using the first ASIN
+  const firstAsin = asins.find((asin) => !completedAsins.has(asin))
+  if (!firstAsin) {
+    console.log('All ASINs have already been processed.')
+    await browser.close()
+    return
+  }
+
+  const bookReaderUrl = `https://read.amazon.com/?asin=${firstAsin}`
+  console.log(`\n---\nLogging in using ASIN: ${firstAsin}\n---`)
+
+  await Promise.any([
+    page.goto(bookReaderUrl, { timeout: 30_000 }),
+    page.waitForURL('**/ap/signin', { timeout: 30_000 })
+  ])
+
+  if (/\/ap\/signin/g.test(new URL(page.url()).pathname)) {
+    await page.locator('input[type="email"]').fill(amazonEmail)
+    await page.locator('input[type="submit"]').click()
+
+    await page.locator('input[type="password"]').fill(amazonPassword)
+    await page.locator('input[type="submit"]').click()
+  }
+
+  // Wait for login to complete and we are at the book reader page
+  try {
+    await page.waitForURL(bookReaderUrl, { timeout: 30_000 })
+  } catch (err) {
+    console.error(
+      'Login failed or took too long. Please check your credentials and internet connection.'
+    )
+    await browser.close()
+    return
+  }
+
   for (const asin of asins) {
     if (completedAsins.has(asin)) {
       console.log(`Skipping already processed ASIN: ${asin}`)
@@ -387,12 +421,16 @@ async function main() {
 
     try {
       console.log(`\n---\nProcessing ASIN: ${asin}\n---`)
-      await extractBook(asin, amazonEmail, amazonPassword)
+      await extractBook(page, asin)
       await fs.appendFile(completedAsinsPath, `${asin}\n`)
     } catch (err: any) {
       console.error(`Error processing ASIN ${asin}:`, err.message)
     }
   }
+
+  await page.close()
+  await context.close()
+  await browser.close()
 }
 
 function parsePageNav(text: string | null): PageNav | undefined {
