@@ -14,7 +14,8 @@ export interface TocItem {
 
 export interface PageChunk {
   index: number
-  page: number
+  page?: number
+  location?: number
   total: number
   screenshot: string
 }

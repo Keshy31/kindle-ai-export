@@ -70,32 +70,65 @@ foreach ($item in $asins) {
     # Initialize output content
     $outputContent = "# $bookTitle`n`n**Author(s):** $authors`n`n---`n`n"
 
-    $results = @()
-    $totalPages = $pages.Count
-    $currentPage = 0
-    foreach ($page in $pages) {
-        $currentPage++
-        $pageNum = $page.page
-        $index = $page.index
-        if ($pageNum -eq $null) { continue } # Skip invalid
-        $pngFile = $page.screenshot
+    $maxJobs = 4 # Adjust based on CPU cores
 
-        Write-Host "Processing page $currentPage of $totalPages (index $index, page $pageNum)"
-
-        $outputFileBase = Join-Path -Path $outputDir -ChildPath "temp_page_$index"
-        $tempTxtFile = "$outputFileBase.txt"
-
-        # Run Tesseract OCR
-        tesseract $pngFile $outputFileBase -l eng --psm 3
-
-        if (Test-Path $tempTxtFile) {
-            $pageText = Get-Content $tempTxtFile -Raw
-            $results += [PSCustomObject]@{ Index = $index; PageNum = $pageNum; Text = $pageText }
-            Remove-Item $tempTxtFile
+    $jobScript = {
+        param($pngFile, $outputDir, $pageNum, $index)
+        $tempTxt = "$outputDir\temp_page_$index.txt"
+        tesseract $pngFile $tempTxt.Replace('.txt', '') -l eng --psm 3
+        if (Test-Path $tempTxt) {
+            $pageText = Get-Content $tempTxt -Raw
+            [PSCustomObject]@{ Index = $index; PageNum = $pageNum; Text = $pageText }
+            Remove-Item $tempTxt
         } else {
             Write-Warning "OCR failed for $pngFile"
-            $results += [PSCustomObject]@{ Index = $index; PageNum = $pageNum; Text = "" }
+            [PSCustomObject]@{ Index = $index; PageNum = $pageNum; Text = "" }
         }
+    }
+
+    $results = @()
+    $totalPages = $pages.Count
+    $started = 0
+    $completed = 0
+
+    $jobs = @{}
+    foreach ($page in $pages) {
+        $pageNum = $page.page
+        $index = $page.index
+        if ($pageNum -eq $null) { continue }  # Skip invalid
+        $pngFile = $page.screenshot
+
+        # Throttle: Wait until a slot is available
+        while ((Get-Job -State Running).Count -ge $maxJobs) {
+            $runningJobs = Get-Job -State Running
+            $finishedJob = Wait-Job -Job $runningJobs -Any
+            $result = Receive-Job $finishedJob
+            $results += $result
+            Remove-Job $finishedJob
+            $completed++
+            # Log with correct details (from hashtable)
+            $jobDetails = $jobs[$finishedJob.Id]
+            Write-Host "Completed OCR job $completed of $totalPages (index $($jobDetails.Index), page $($jobDetails.PageNum))"
+        }
+
+        $started++
+        Write-Host "Started OCR job $started of $totalPages (index $index, page $pageNum)"
+        $job = Start-ThreadJob -ScriptBlock $jobScript -ArgumentList $pngFile, $outputDir, $pageNum, $index
+        # Store details for later logging
+        $jobs[$job.Id] = @{ Index = $index; PageNum = $pageNum }
+        Start-Sleep -Milliseconds 50  # Small delay to allow job state to update
+    }
+
+    # Wait for all remaining and collect
+    Write-Host "Waiting for remaining jobs to complete..."
+    $remainingJobs = Get-Job
+    foreach ($job in $remainingJobs) {
+        $result = Receive-Job $job -Wait
+        $results += $result
+        Remove-Job $job
+        $completed++
+        $jobDetails = $jobs[$job.Id]
+        Write-Host "Completed OCR job $completed of $totalPages (index $($jobDetails.Index), page $($jobDetails.PageNum))"
     }
 
     # Sort results by index and build output

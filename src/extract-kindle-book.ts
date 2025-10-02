@@ -165,7 +165,7 @@ async function extractBook(page: Page, asin: string) {
     assert(title)
 
     await tocItem.locator('button.toc-item-button').click()
-    await delay(250)
+    await delay(100)
 
     const pageNav = await getPageNav()
     assert(pageNav)
@@ -190,34 +190,63 @@ async function extractBook(page: Page, asin: string) {
   const parsedToc = parseTocItems(tocItems)
   const toc: TocItem[] = tocItems.map(({ locator: _, ...tocItem }) => tocItem)
 
-  const total = parsedToc.firstPageTocItem.total
-  const pagePadding = `${total * 2}`.length
-  await parsedToc.firstPageTocItem.locator!.scrollIntoViewIfNeeded()
-  await parsedToc.firstPageTocItem.locator!.locator('button.toc-item-button').click()
-
-  const totalContentPages = Math.min(
-    parsedToc.afterLastPageTocItem?.page
-      ? parsedToc.afterLastPageTocItem!.page
-      : total,
-    total
-  )
-  assert(totalContentPages > 0, 'No content pages found')
+  let totalContentPages: number
+  let pagePadding: string | number
+  let usePageNumberBasedTermination = false
 
   // Close the TOC menu by clicking the TOC button again
   await page.locator('ion-button[item-i-d="top_menu_table_of_contents"]').click()
   await delay(1000)
 
+  if (parsedToc.firstPageTocItem?.page) {
+    usePageNumberBasedTermination = true
+    const total = parsedToc.firstPageTocItem.total
+    pagePadding = `${total * 2}`.length
+
+    totalContentPages = Math.min(
+      parsedToc.afterLastPageTocItem?.page
+        ? parsedToc.afterLastPageTocItem!.page
+        : total,
+      total
+    )
+
+    const startPage = parsedToc.firstPageTocItem.page
+    console.warn(
+      `navigating to starting page ${startPage} to ensure a clean start...`
+    )
+    await goToPage(startPage)
+  } else {
+    await input({
+      message:
+        'Could not automatically determine starting page. Please manually navigate to the first page of content, then press Enter to continue.'
+    })
+
+    const nav = await getPageNav()
+    assert(nav?.total, 'Could not determine total pages after manual navigation.')
+    totalContentPages = nav.total
+    pagePadding = `${totalContentPages * 2}`.length
+  }
+
+  assert(totalContentPages > 0, 'No content pages found')
+
   const pages: Array<PageChunk> = []
   console.warn(
-    `reading ${totalContentPages} pages${total > totalContentPages ? ` (of ${total} total pages stopping at "${parsedToc.afterLastPageTocItem!.title}")` : ''}...`
+    `reading ${
+      usePageNumberBasedTermination ? totalContentPages : 'until the end of the book'
+    } pages${
+      totalContentPages && parsedToc.afterLastPageTocItem
+        ? ` (of ${totalContentPages} total pages stopping at "${parsedToc.afterLastPageTocItem!.title}")`
+        : ''
+    }...`
   )
 
   do {
     const pageNav = await getPageNav()
-    if (pageNav?.page === undefined) {
+    if (!pageNav || (pageNav.page === undefined && pageNav.location === undefined)) {
+      console.warn('Could not determine current page or location. Ending capture.')
       break
     }
-    if (pageNav.page > totalContentPages) {
+    if (usePageNumberBasedTermination && pageNav.page && pageNav.page > totalContentPages) {
       break
     }
 
@@ -231,17 +260,19 @@ async function extractBook(page: Page, asin: string) {
       .locator(krRendererMainImageSelector)
       .screenshot({ type: 'png', scale: 'css' })
 
+    const pageOrLocation = pageNav.page ?? pageNav.location!
     const screenshotPath = path.join(
       pageScreenshotsDir,
-      `${index}`.padStart(pagePadding, '0') +
+      `${index}`.padStart(pagePadding as number, '0') +
         '-' +
-        `${pageNav.page}`.padStart(pagePadding, '0') +
+        `${pageOrLocation}`.padStart(pagePadding as number, '0') +
         '.png'
     )
     await fs.writeFile(screenshotPath, b)
     pages.push({
       index,
       page: pageNav.page,
+      location: pageNav.location,
       total: pageNav.total,
       screenshot: screenshotPath
     })
@@ -252,7 +283,7 @@ async function extractBook(page: Page, asin: string) {
     // the screenshot changing the DOM temporarily and not being stable yet.
     await delay(100)
 
-    if (pageNav.page > totalContentPages) {
+    if (usePageNumberBasedTermination && pageNav.page && pageNav.page > totalContentPages) {
       break
     }
 
@@ -264,7 +295,7 @@ async function extractBook(page: Page, asin: string) {
     do {
       try {
         // Navigate to the next page
-        // await delay(100)
+         await delay(50)
         if (retries % 10 === 0) {
           if (retries > 0) {
             console.warn('retrying...', {
@@ -277,7 +308,7 @@ async function extractBook(page: Page, asin: string) {
           // Click the next page button
           await page
             .locator('button#kr-chevron-right')
-            .click({ timeout: 1000 })
+            .click({ timeout: 500 })
         }
         // await delay(500)
       } catch (err: any) {
@@ -479,36 +510,51 @@ function parsePageNav(text: string | null): PageNav | undefined {
 }
 
 function parseTocItems(tocItems: TocItem[]) {
+  const IGNORABLE_TOC_TITLES = [
+    /^cover$/i,
+    /title page/i,
+    /copyright/i,
+    /dedication/i,
+    /^contents$/i,
+    /table of contents/i,
+    /about the author/i
+  ]
+
   // Find the first page in the TOC which contains the main book content
   // (after the title, table of contents, copyright, etc)
-  const firstPageTocItem = tocItems.find((item) => item.page !== undefined)
-  assert(firstPageTocItem, 'Unable to find first valid page in TOC')
+  const firstPageTocItem = tocItems.find((item) => {
+    if (item.page === undefined) return false
+    return !IGNORABLE_TOC_TITLES.some((r) => r.test(item.title))
+  })
 
   // Try to find the first page in the TOC after the main book content
   // (e.g. acknowledgements, about the author, etc)
-  const afterLastPageTocItem = tocItems.find((item) => {
-    if (item.page === undefined) return false
-    if (item === firstPageTocItem) return false
+  let afterLastPageTocItem: TocItem | undefined
+  if (firstPageTocItem) {
+    afterLastPageTocItem = tocItems.find((item) => {
+      if (item.page === undefined) return false
+      if (item === firstPageTocItem) return false
 
-    const percentage = item.page / item.total
-    if (percentage < 0.9) return false
+      const percentage = item.page / item.total
+      if (percentage < 0.9) return false
 
-    if (/acknowledgements/i.test(item.title)) return true
-    if (/^discover more$/i.test(item.title)) return true
-    if (/^extras$/i.test(item.title)) return true
-    if (/about the author/i.test(item.title)) return true
-    if (/meet the author/i.test(item.title)) return true
-    if (/^also by /i.test(item.title)) return true
-    if (/^copyright$/i.test(item.title)) return true
-    if (/ teaser$/i.test(item.title)) return true
-    if (/ preview$/i.test(item.title)) return true
-    if (/^excerpt from/i.test(item.title)) return true
-    if (/^cast of characters$/i.test(item.title)) return true
-    if (/^timeline$/i.test(item.title)) return true
-    if (/^other titles/i.test(item.title)) return true
+      if (/acknowledgements/i.test(item.title)) return true
+      if (/^discover more$/i.test(item.title)) return true
+      if (/^extras$/i.test(item.title)) return true
+      if (/about the author/i.test(item.title)) return true
+      if (/meet the author/i.test(item.title)) return true
+      if (/^also by /i.test(item.title)) return true
+      if (/^copyright$/i.test(item.title)) return true
+      if (/ teaser$/i.test(item.title)) return true
+      if (/ preview$/i.test(item.title)) return true
+      if (/^excerpt from/i.test(item.title)) return true
+      if (/^cast of characters$/i.test(item.title)) return true
+      if (/^timeline$/i.test(item.title)) return true
+      if (/^other titles/i.test(item.title)) return true
 
-    return false
-  })
+      return false
+    })
+  }
 
   return {
     firstPageTocItem,
